@@ -56,133 +56,123 @@ class Motor():
     self.io.stop()
   
   def set(self, leftdutycycle, rightdutycycle):
-    if leftdutycycle >= 0:
+    if leftdutycycle > 1 or leftdutycycle < -1 or rightdutycycle > 1 or rightdutycycle < -1:
+        print('Duty cycles ({}, {}) Out of Bounds'.format(leftdutycycle, rightdutycycle))
+        raise ValueError
+
+    leftpwm = leftdutycycle * 255
+    rightpwm = rightdutycycle * 255
+    
+    if leftpwm >= 0:
       self.io.set_PWM_dutycycle(MTR1_LEGA, 0)
-      self.io.set_PWM_dutycycle(MTR1_LEGB, leftdutycycle)
-      
+      self.io.set_PWM_dutycycle(MTR1_LEGB, leftpwm)
     else:
-      self.io.set_PWM_dutycycle(MTR1_LEGA, 255)
-      self.io.set_PWM_dutycycle(MTR1_LEGB, 255+leftdutycycle)
+      self.io.set_PWM_dutycycle(MTR1_LEGA, -leftpwm)
+      self.io.set_PWM_dutycycle(MTR1_LEGB, 0)
 
-    if rightdutycycle >= 0:
+    if rightpwm >= 0:
       self.io.set_PWM_dutycycle(MTR2_LEGA, 0)
-      self.io.set_PWM_dutycycle(MTR2_LEGB, rightdutycycle)
+      self.io.set_PWM_dutycycle(MTR2_LEGB, rightpwm)
     else:
-      self.io.set_PWM_dutycycle(MTR2_LEGA, 255)
-      self.io.set_PWM_dutycycle(MTR2_LEGB, 255+rightdutycycle)
+      self.io.set_PWM_dutycycle(MTR2_LEGA, -rightpwm)
+      self.io.set_PWM_dutycycle(MTR2_LEGB, 0)
 
-  def setlinear(self, speed, run=True, friction_compensation=92):
+  def setlinear(self, speed, run=True, friction_compensation=0.361):
     # set run to True to actually set the pwm
     # if run is false, only return the pwm values
-    # speed = 0.31 * (pwm - 92)
+    # speed = 79.0 * (dutycycle - 0.361)
+    # dutycycle = speed / 79.0 + 0.361
+
+    # speed input range: [-50, 50]
+    # speed unit: cm/s
+
+    LINEAR_SLOPE = 79.0
+
     if speed > 0.0:
-      pwm = speed/0.31 + friction_compensation
+      dutycyle = speed/LINEAR_SLOPE + friction_compensation
     elif speed == 0.0:
-      pwm = 0
+      dutycyle = 0
     else:
-      pwm = speed/0.31 - friction_compensation
+      dutycyle = speed/LINEAR_SLOPE - friction_compensation
       
     if run:
-      # Safety to ensure pwm values don't exceed 255
-      if pwm > 255 or pwm < -255:
-        print('Calculated PWM ({}) Out of Bounds'.format(pwm))
-        raise KeyboardInterrupt
-      self.set(pwm, pwm)
+      self.set(dutycyle, dutycyle)
     else:
-      return pwm
+      return dutycyle
 
-  def setspin(self, speed, run=True, friction_compensation=105):
-    # speed = 1.26 * (pwm - 105)
+  def setspin(self, speed, run=True, friction_compensation=0.412):
+    # speed = 552 * (dutycycle - 0.412)
+    # dutycycle = speed / 552 + 0.412
     # Angular velocity in degrees/s
     # Counterclockwise is positive
+    # speed input range: [-324, 324]
     
+    SPIN_SLOPE = 552 
+
     if speed > 0.0:
-      pwm = speed/1.26 + friction_compensation
+      dutycycle = speed / SPIN_SLOPE + friction_compensation
     elif speed == 0.0:
-      pwm = 0
+      dutycycle = 0
     else:
-      pwm = speed/1.26 - friction_compensation
+      dutycycle = speed / SPIN_SLOPE - friction_compensation
       
     if run:
-      if pwm > 255 or pwm < -255:
-        print('Calculated PWM ({}) Out of Bounds'.format(pwm))
-        raise KeyboardInterrupt
-      self.set(-pwm, pwm)
+      self.set(-dutycycle, dutycycle)
     else:
-      return pwm
+      return dutycycle
     
   def setvel(self, linear, spin):
     # Linear portion of setvel
-    pwm_linear = self.setlinear(linear, run=False, friction_compensation=100)
-    print(pwm_linear)
+    dutycycle_linear = self.setlinear(linear, run=False, friction_compensation=0.361)
+    print(dutycycle_linear)
     # Spin portion of setvel
-    pwm_spin = self.setspin(spin, run=False, friction_compensation=20)
-    print(pwm_spin)
+    # friction_compensation set to 20 because it's already moving
+    dutycycle_spin = self.setspin(spin, run=False, friction_compensation=0.07)
+    print(dutycycle_spin)
     # Left and Right PWM
-    leftpwm = pwm_linear - pwm_spin
-    rightpwm = pwm_linear + pwm_spin
+    leftdutycycle = dutycycle_linear - dutycycle_spin
+    rightdutycycle = dutycycle_linear + dutycycle_spin
     
-    if (leftpwm > 255 or leftpwm < -255) or (rightpwm > 255 or rightpwm < -255):
-      print('Calculated PWM ({}, {}) Out of Bounds'.format(leftpwm, rightpwm))
-      raise KeyboardInterrupt
+    self.set(leftdutycycle, rightdutycycle)
+    print(leftdutycycle)
+    print(rightdutycycle)   
     
-    self.set(leftpwm, rightpwm)
-    print(leftpwm)
-    print(rightpwm)
-    
-    # Circle test
-    #leftspeed = 198/6
-    #rightspeed = 116/6
-    #leftpwm = leftspeed/0.31 + 92
-    #rightpwm = rightspeed/0.31 + 92
-    #self.set(leftpwm, rightpwm)
-
-def p5():
-  slow = 150
-  less_slow = 200
-  medium = 250
-
-  motor.setlinear(50)
+def line():
+  motor.setlinear(25)
+  time.sleep(1)
+  motor.setspin(180)
+  time.sleep(1)
+  motor.setlinear(25)
+  time.sleep(1)
+  motor.setspin(180)
   time.sleep(1)
 
-def p6():
-  slow = 150
-  less_slow = 200
-  medium = 250
-  motor.setspin(medium)
-  time.sleep(10)
-
-def p7():
-  # motor.setlinear(150)
-  # time.sleep(1)
-  # motor.setspin(150)
-  # time.sleep(1.3)
-  # motor.setlinear(150)
-  # time.sleep(1)
-
-  motor.setlinear(150)
+def triangle():  
+  motor.setlinear(25)
   time.sleep(1)
-  motor.setspin(150)
-  time.sleep(0.9)
-  motor.setlinear(150)
+  motor.setspin(120)
   time.sleep(1)
-  motor.setspin(150)
-  time.sleep(0.9)
-  motor.setlinear(150)
+  motor.setlinear(25)
   time.sleep(1)
-  motor.setspin(150)
-  time.sleep(0.9)
+  motor.setspin(120)
+  time.sleep(1)
+  motor.setlinear(25)
+  time.sleep(1)
+  motor.setspin(120)
+  time.sleep(1)
 
+def circle ():
+  motor.setvel(50*3.14/12, 360/12)
+  time.sleep(12)  
 
 if __name__ == "__main__":
   motor = Motor()
   try:
-    motor.setvel(157/12,360/12)
-    time.sleep(12)
+    circle()
     motor.shutdown()  
   except KeyboardInterrupt:
+    print("Ending due to keyboard interrupt")
     motor.shutdown()
-
   except Exception as e:
     print("Ending due to exception: %s" % repr(e))
     motor.shutdown()
