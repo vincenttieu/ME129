@@ -4,6 +4,7 @@ from turtle import right
 import pigpio
 import sys
 import time
+from linefollow2 import LineReader
 
 MTR1_LEGA = 8
 MTR1_LEGB = 7
@@ -124,18 +125,14 @@ class Motor():
   def setvel(self, linear, spin):
     # Linear portion of setvel
     dutycycle_linear = self.setlinear(linear, run=False, friction_compensation=0.361)
-    print(dutycycle_linear)
     # Spin portion of setvel
     # friction_compensation set to 20 because it's already moving
     dutycycle_spin = self.setspin(spin, run=False, friction_compensation=0.07)
-    print(dutycycle_spin)
     # Left and Right PWM
     leftdutycycle = dutycycle_linear - dutycycle_spin
     rightdutycycle = dutycycle_linear + dutycycle_spin
     
     self.set(leftdutycycle, rightdutycycle)
-    print(leftdutycycle)
-    print(rightdutycycle)   
     
 def line():
   motor.setlinear(25)
@@ -167,9 +164,13 @@ def circle ():
 
 if __name__ == "__main__":
   motor = Motor()
+  lr = LineReader()
   try:
-    circle()
-    motor.shutdown()  
+    while True:
+      signal = lr.steer()
+      print(signal)
+      motor.setvel(20, 30*signal)
+    
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
     motor.shutdown()
