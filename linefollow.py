@@ -5,7 +5,9 @@ from turtle import right
 import pigpio
 import sys
 import time
-import numpy as np
+import math
+from collections import deque
+from collections import Counter
 from motor import Motor
 
 LF_SENSOR = 14
@@ -33,17 +35,19 @@ class LineReader():
     self.full_turn = 100
     # Slight turn = 2 sensors reading
     self.slight_turn = 50
-
     # Spin for finding line
     self.find_line = 150
 
     # Linear Speeds
-    self.v_find = 15
+    self.v_find = 20
     self.v_norm = 20
     self.v_turn = 0
 
-    # Start Time
-    self.start_time = time.time()
+    # On-track Time
+    self.last_seen = time.time()
+
+    # Queue to store the states
+    self.queue = deque()
 
   def read_state_raw(self):
     lf_state = self.io.read(LF_SENSOR)
@@ -66,7 +70,12 @@ class LineReader():
     # If a line is detected, set lost to false
     if 1 in raw_state:
       self.lost = False
+      self.last_seen = time.time()
     if raw_state == (0,0,0):
+      # If the robot has not detected anything for over 5 seconds,
+      # set lost to be true
+      if time.time() - self.last_seen > 5:
+        self.lost = True
       # No line is detected. This could be any of the four cases:
       # At the start
       if self.lost == True:
@@ -74,17 +83,17 @@ class LineReader():
           # Turn in circle until line is reached
           linear = self.v_find
           # Keep on widening the circle as time elapses (reduce angular velocity)
-          steer = self.find_line / (1 + 0.2*(time.time() - self.start_time))
+          steer = self.find_line / (1 + 2*(time.time() - self.last_seen))
       # It deviates from the line / line ends
       else:
           # Not lost, next step depends on where robot was previously
-          if self.edge == 'L':
+          if self.readState() == 'L':
             # Spin in place to left
             steer = self.hard_turn
-          elif self.edge == 'R':
+          elif self.readState() == 'R':
             # Spin in place to right
             steer = -self.hard_turn
-          elif self.edge == 'C':
+          elif self.readState() == 'C':
             # Previous state was center, Robot reached end of line
             steer = self.hard_turn
           linear = self.v_turn
@@ -98,43 +107,37 @@ class LineReader():
       linear = self.v_norm
       # These are the normal cases
       # If the robot is at the center, or close to the center, set edge to 'C'
-      if raw_state in [(0,1,0), (1,1,1), (0,1,1), (1,1,0)]:
-        self.edge = 'C'
+      if raw_state in [(0,1,0), (1,1,1)]:
+        self.storeState('C')
       # If the tape is in the center or head on, keep going straight
       if raw_state in [(0,1,0), (1,1,1)]:
         steer = 0
       # if tape is to the far right, set edge to 'R' and turn right
       if raw_state == (0,0,1):
-        self.edge = 'R'
+        self.storeState('R')
         steer = -self.full_turn
       # If tape is slightly to the right, turn a little right
       if raw_state == (0,1,1):
+        self.storeState('R')
         steer = -self.slight_turn
       # if tape is to the left
       if raw_state == (1,0,0):
-        self.edge = 'L'
+        self.storeState('L')
         steer = self.full_turn
       if raw_state == (1,1,0):
+        self.storeState('L')
         steer = self.slight_turn
-      
-      
-
-      """ Centroid Implementation
-      # Compute the centroid
-      # Centroid = (1, 0, -1) * (L, C, R) / (L + C + R)
-      # For example, centroid of (L, C, R) = (1, 1, 0) = -0.5
-      # (-1, 0, 1) * (1, 1, 0) / (1 + 1 + 0) = -1/2
-      # centroid of (L, C, R) = (1, 0, 0) is -1, which is larger than the previous one
-      centroid = np.dot((1, 0, -1), raw_state) / sum(np.array(raw_state))
-      if centroid > 0:
-        self.edge = 'L'
-      elif centroid < 0:
-        self.edge = 'R'
-      output = centroid
-      """
-    
     return linear, steer
 
+  # store the most recent 500 states
+  def storeState(self, state):
+    self.queue.append(state)
+    if len(self.queue) > 500:
+      self.queue.popleft()
+
+  # get the most frequent state in queue
+  def readState(self):
+    return max(set(self.queue), key=self.queue.count)
 
   def shutdown(self):
     self.io.stop()

@@ -4,7 +4,6 @@ from turtle import right
 import pigpio
 import sys
 import time
-from linefollow2 import LineReader
 
 MTR1_LEGA = 8
 MTR1_LEGB = 7
@@ -164,13 +163,10 @@ def circle ():
 
 if __name__ == "__main__":
   motor = Motor()
-  lr = LineReader()
   try:
-    while True:
-      signal = lr.steer()
-      print(signal)
-      motor.setvel(20, 30*signal)
-    
+    motor.setvel(10, 0.)
+    time.sleep(5)
+    motor.shutdown()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
     motor.shutdown()
