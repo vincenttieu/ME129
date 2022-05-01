@@ -132,6 +132,9 @@ class Motor():
     rightdutycycle = dutycycle_linear + dutycycle_spin
     
     self.set(leftdutycycle, rightdutycycle)
+  
+  def stop(self):
+    self.set(0,0)
     
 def line():
   motor.setlinear(25)
@@ -164,8 +167,8 @@ def circle ():
 if __name__ == "__main__":
   motor = Motor()
   try:
-    motor.setvel(10, 0.)
-    time.sleep(5)
+    motor.setspin(90)
+    time.sleep(20)
     motor.shutdown()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
