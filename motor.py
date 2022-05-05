@@ -100,14 +100,14 @@ class Motor():
     else:
       return dutycyle
 
-  def setspin(self, speed, run=True, friction_compensation=0.412):
+  def setspin(self, speed, run=True, friction_compensation=0.435):
     # speed = 552 * (dutycycle - 0.412)
     # dutycycle = speed / 552 + 0.412
     # Angular velocity in degrees/s
     # Counterclockwise is positive
     # speed input range: [-324, 324]
     
-    SPIN_SLOPE = 552 
+    SPIN_SLOPE = 1100
 
     if speed > 0.0:
       dutycycle = speed / SPIN_SLOPE + friction_compensation
@@ -118,6 +118,7 @@ class Motor():
       
     if run:
       self.set(-dutycycle, dutycycle)
+      print(dutycycle)
     else:
       return dutycycle
     
@@ -168,7 +169,9 @@ if __name__ == "__main__":
   motor = Motor()
   try:
     motor.setspin(90)
-    time.sleep(20)
+    time.sleep(4)
+  
+    
     motor.shutdown()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")

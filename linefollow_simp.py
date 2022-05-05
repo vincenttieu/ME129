@@ -25,7 +25,7 @@ class LineReaderSimp:
     self.io.set_mode(RT_SENSOR, pigpio.INPUT)
 
     # State of robot
-    self.edge = 'C'
+    self.last_state = (0,0,0)
 
     # Full turn = only far left or right sensor reading
     self.full_turn = 100
@@ -50,10 +50,20 @@ class LineReaderSimp:
     Sign Convention: Linear: forward = positive, Angular: positive = CCW / left turn
     """
     raw_state = self.read_state_raw()
-    if raw_state in [(1,0,1), (1,1,1), (0,0,0)]:
+    if raw_state in [(1,0,1), (1,1,1)]:
       # We are at an intersection
       linear = 0
       steer = 0
+    elif raw_state == (0,0,0):
+      if self.last_state == (0,0,1):
+        linear =self.v_norm
+        steer = -self.full_turn
+      elif self.last_state == (1,0,0):
+        linear = self.v_norm
+        steer = self.full_turn
+      else:
+        linear = 0
+        steer = 0
     else:
       # Update time
       self.intersection_time = time.time()
@@ -74,6 +84,9 @@ class LineReaderSimp:
       # If tape is slightly to the left
       if raw_state == (1,1,0):
         steer = self.slight_turn 
+    
+    if 1 in raw_state:
+      self.last_state = raw_state
     return linear, steer
 
   def shutdown(self):

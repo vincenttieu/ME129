@@ -43,7 +43,7 @@ class GridFollow:
     self.v_after_int = 20
 
     # Turn method
-    self.turn_angular_speed = 90
+    self.turn_angular_speed = 180
 
   def driveStraight(self):
     starttime = time.time()
@@ -83,19 +83,47 @@ class GridFollow:
 
   def turnTo(self, direction):
     global heading
-    print("Current: ", heading, " ,aimed: ", direction)
+    direction = direction % 4
+
+    # if aimed direction is the same as current heading, don't change
+    if direction - heading == 0:
+      return
+
+    # determine turning direction (cw / ccw)
     if (direction - heading)%4 <=2:
       self.motor.setspin(self.turn_angular_speed)
     else:
       self.motor.setspin(-self.turn_angular_speed)
+    # turn at least half a second
     time.sleep(0.5)
+
+    # if turn 180, turn at least 1.5 seconds
     if (direction - heading)%4 == 2:
       time.sleep(1)
+
+    # simply turn to the next line
+    self.turnToNextLine()
+    heading = direction
+
+  def turnToNextLine(self):
+    global heading
+    start_time = time.time()
+    self.motor.setspin(self.turn_angular_speed)
+    time.sleep(0.5)
     while True:
       if self.line.read_state_raw() == (0,1,0):
         self.motor.stop()
         break
-    heading = direction
+    used_time = time.time() - start_time
+    print(used_time)
+    if 0.5 <= used_time < 1.5:
+      return 1
+    elif 1.5 <= used_time < 2.5:
+      return 2
+    elif 2.5 <= used_time < 3.5:
+      return 3
+    else:
+      return 4
     
   def drive_sequence(self, turn_sequence):
     """ Drives the robot according to a known sequence
@@ -107,6 +135,10 @@ class GridFollow:
       self.turn(turns.get(turn, 'F'))
       self.driveStraight()
 
+  def wait(self):
+    self.motor.stop()
+    time.sleep(0.5)
+
   def spincheck(self):
     """ Spins robot and checks if there are streets in various positions
     Returns list of bool
@@ -115,6 +147,7 @@ class GridFollow:
     streets = [Forward, Left, Back, Right] 
     """
 
+    global heading
     # Initialize all streets to False first
     streets = [False, False, True, False]
 
@@ -122,79 +155,26 @@ class GridFollow:
     if 1 in self.line.read_state_raw():
       streets[0] = True
     
-    # Check left street
-    start_time = time.time()
-    self.motor.setspin(self.turn_angular_speed)
-    time.sleep(0.5)
-    while True:
-      if self.line.read_state_raw() == (0,1,0):
-        break
-    used_time = time.time() - start_time
-    if used_time < 1.5:
-      streets[1] = True
-    # Return to front
-    self.motor.setspin(-self.turn_angular_speed)
-    time.sleep(used_time)
-    
-    # Check right street
-    start_time = time.time()
-    self.motor.setspin(-self.turn_angular_speed)
-    time.sleep(0.5)
-    while True:
-      if self.line.read_state_raw() == (0,1,0):
-        break
-    used_time = time.time() - start_time
-    if used_time < 1.5:
-      streets[3] = True
-
-    # Return to front
-    self.motor.setspin(self.turn_angular_speed)
-    time.sleep(used_time)
-
-    self.motor.stop()
-    
-
-    """
-    self.motor.setspin(self.turn_angular_speed-5)
-    while angle < 135:
-      start = time.time()
-      if 1 in self.line.read_state_raw():
-        if angle >= 45 and angle < 135:
-          streets[1] = True
-      stop = time.time()
-      dt = stop - start
-      angle += dt * self.turn_angular_speed
-    self.motor.setspin(0)
-    self.motor.setspin(-(self.turn_angular_speed-5))
-    time.sleep(135 / self.turn_angular_speed)
-
-    # Turn right first
-    self.motor.setspin(-(self.turn_angular_speed-5))
-    while angle < 135:
-      start = time.time()
-      if 1 in self.line.read_state_raw():
-        if angle >= 45 and angle < 135:
-          streets[3] = True
-      stop = time.time()
-      dt = stop - start
-      angle += dt * self.turn_angular_speed
-    self.motor.setspin(0)
-    self.motor.setspin(self.turn_angular_speed-5)
-    time.sleep(135 / self.turn_angular_speed)
-    self.motor.setspin(0)
-    """
-    
+    total_turns = 0
+    while total_turns < 3:
+      turn = self.turnToNextLine()
+      self.wait()
+      heading = (heading + turn) % 4
+      streets[heading] = True
+      total_turns += turn
+    print(total_turns)
     return streets
 
   def explore(self):
     # Drive straight until next intersection
     self.driveStraight()
-    # Wait 0.5 second to fully stop
-    time.sleep(0.5)
+    # Fully stop
+    self.wait()
 
     # Calculate new coordinates
     global lon, lat, heading
     lon, lat = shift(lon, lat, heading)
+    print(lon, lat)
 
     # Check if current intersection already exists
     cur = intersection(lon, lat)
@@ -202,10 +182,11 @@ class GridFollow:
     if not cur:
       cur = Intersection(lon, lat)
 
+    current_heading = heading
     # Check and update surrounding streets
     streets = self.spincheck()
     # Store streets in NWSE order
-    streets = streets[4-heading:] + streets[:4-heading]
+    streets = streets[4-current_heading:] + streets[:4-current_heading]
 
     for i in range(4):
       if cur.streets[i] == UNKNOWN:
@@ -330,6 +311,8 @@ if __name__ == "__main__":
     grid.returnToTarget()
     grid.returnToTarget()
 
+    # grid.driveStraight()
+    # grid.spincheck()
     # grid.driveStraight()
     # time.sleep(1)
     # streets = grid.spincheck()
