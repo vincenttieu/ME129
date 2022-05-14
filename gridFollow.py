@@ -11,11 +11,13 @@ from collections import deque
 from collections import Counter
 from motor import Motor
 from linefollow_simp import LineReaderSimp
+from angle import angle
 
 NORTH = 0
 WEST  = 1
 SOUTH = 2
 EAST  = 3
+STOP  = 'STOP'
 HEADING = {NORTH:'North', WEST:'West', SOUTH:'South',
            EAST:'East', None:'None'} # For printing
 
@@ -37,13 +39,14 @@ class GridFollow:
   def __init__(self):
     self.motor = Motor()
     self.line = LineReaderSimp()
+    self.gyro = angle()
 
     # Drive Straight
-    self.time_after_int = 0.5
+    self.time_after_int = 0.4
     self.v_after_int = 20
 
     # Turn method
-    self.turn_angular_speed = 180
+    self.turn_angular_speed = 120
 
   def driveStraight(self):
     starttime = time.time()
@@ -84,47 +87,49 @@ class GridFollow:
   def turnTo(self, direction):
     global heading
     direction = direction % 4
-
-    # if aimed direction is the same as current heading, don't change
-    if direction - heading == 0:
-      return
-
-    # determine turning direction (cw / ccw)
-    if (direction - heading)%4 <=2:
-      self.motor.setspin(self.turn_angular_speed)
+    
+    turn = (direction - heading) % 4
+    if turn == 0:
+      pass
+    elif turn == 1:
+      self.turnToNextLine()
+    elif turn == 2:
+      turned = 0
+      while turned < 2:
+        turned += self.turnToNextLine()
     else:
-      self.motor.setspin(-self.turn_angular_speed)
-    # turn at least half a second
-    time.sleep(0.5)
+      self.turnToNextLine(direction=-1)
 
-    # if turn 180, turn at least 1.5 seconds
-    if (direction - heading)%4 == 2:
-      time.sleep(1)
-
-    # simply turn to the next line
-    self.turnToNextLine()
     heading = direction
 
-  def turnToNextLine(self):
+  def turnToNextLine(self, direction=1):
+    # turn to the next line
+    # direction =  1 -> counter-clockwise
+    # direction = -1 -> clockwise
     global heading
     start_time = time.time()
-    self.motor.setspin(self.turn_angular_speed)
-    time.sleep(0.5)
+    
+    # Starting kick for 20ms
+    self.motor.set(-direction, direction)
+    time.sleep(0.05)
+
+    self.motor.setspin(direction * self.turn_angular_speed)
+    time.sleep(0.4)
     while True:
       if self.line.read_state_raw() == (0,1,0):
-        self.motor.stop()
         break
     used_time = time.time() - start_time
     print(used_time)
-    if 0.5 <= used_time < 1.5:
+    # The numbers used here are calibrated
+    if used_time < 1.02:
       return 1
-    elif 1.5 <= used_time < 2.5:
+    elif 1.02 <= used_time < 1.68:
       return 2
-    elif 2.5 <= used_time < 3.5:
+    elif 1.68 <= used_time < 2.5:
       return 3
     else:
       return 4
-    
+
   def drive_sequence(self, turn_sequence):
     """ Drives the robot according to a known sequence
     turn_sequence = List of strings, 'L' is left turn, 'F' is forward, 'R' is right turn
@@ -139,7 +144,7 @@ class GridFollow:
     self.motor.stop()
     time.sleep(0.5)
 
-  def spincheck(self):
+  def spinCheck(self):
     """ Spins robot and checks if there are streets in various positions
     Returns list of bool
     streets = [bool, bool, bool, bool]
@@ -148,23 +153,32 @@ class GridFollow:
     """
 
     global heading
-    # Initialize all streets to False first
+    # Initialize all streets except for the back street to False first
     streets = [False, False, True, False]
 
     # Detect forward street
     if 1 in self.line.read_state_raw():
       streets[0] = True
     
-    total_turns = 0
-    while total_turns < 3:
-      turn = self.turnToNextLine()
+    total_turned = 0
+    # Check surroundings until turned at least 270 degrees
+    while total_turned < 3:
+      # turn to next line
+      turned = self.turnToNextLine()
       self.wait()
-      heading = (heading + turn) % 4
-      streets[heading] = True
-      total_turns += turn
-    print(total_turns)
+      # update heading
+      heading = (heading + turned) % 4
+      # update total_turned
+      total_turned += turned
+      streets[total_turned%4] = True
+
     return streets
 
+  def calibrateTurn(self):
+    while True:
+      self.turnToNextLine()
+      self.wait()
+      
   def explore(self):
     # Drive straight until next intersection
     self.driveStraight()
@@ -174,54 +188,114 @@ class GridFollow:
     # Calculate new coordinates
     global lon, lat, heading
     lon, lat = shift(lon, lat, heading)
-    print(lon, lat)
+    print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
 
     # Check if current intersection already exists
     cur = intersection(lon, lat)
-    # If not, create a new intersection
+
+    # Store current heading, since spinCheck() may change the heading
+    current_heading = heading
+
+    # If not, create a new intersection and check surrondings
     if not cur:
       cur = Intersection(lon, lat)
 
-    current_heading = heading
-    # Check and update surrounding streets
-    streets = self.spincheck()
-    # Store streets in NWSE order
-    streets = streets[4-current_heading:] + streets[:4-current_heading]
+      # Check and update surrounding streets
+      streets = self.spinCheck()
+      # Store streets in NWSE order
+      streets = streets[4-current_heading:] + streets[:4-current_heading]
 
-    for i in range(4):
-      if cur.streets[i] == UNKNOWN:
-        if streets[i]:
-          cur.streets[i] = UNEXPLORED
-        else:
-          cur.streets[i] = NOSTREET
+      # Update surrounding streets
+      for i in range(4):
+        if cur.streets[i] == UNKNOWN:
+          if streets[i]:
+            neighborLon, neighborLat = shift(lon, lat, i)
+            neighbor = intersection(neighborLon, neighborLat)
+            if neighbor:
+              cur.streets[i] = CONNECTED
+              neighbor.streets[(i+2)%4] = CONNECTED
+            else:
+              cur.streets[i] = UNEXPLORED
+          else:
+            cur.streets[i] = NOSTREET
 
     # If lastintersection exists, update the relationship between lastintersection and current intersection
     global lastintersecion
     if lastintersecion:
-      lastintersecion.neighbors[heading] = cur
-      lastintersecion.streets[heading] = CONNECTED
+      lastintersecion.neighbors[current_heading] = cur
+      lastintersecion.streets[current_heading] = CONNECTED
       
-       # The backwards direction
-      backHeading = (heading+2)%4
+      # The backwards direction
+      backHeading = (current_heading+2)%4
       cur.neighbors[backHeading] = lastintersecion
       cur.streets[backHeading] = CONNECTED
       cur.headingToTarget = backHeading
 
+    # If there are unexplored streets, randomly go to an unexplored street
     unexplored_streets = [i for i, x in enumerate(cur.streets) if x == UNEXPLORED]
     if unexplored_streets:
       direction = random.choice(unexplored_streets)
       self.turnTo(direction)
+    # Else, randomly go to a connected street
     else:
-      connected_streets = [i for i, x in enumerate(cur.streets) if x == CONNECTED]
-      direction = random.choice(connected_streets)
+      # If there are still unexplored intersections, use Dijkstra's algorithm to deterministically explore
+      # Set the headingToTargets to the nearest unexplored intersection
+      unexplored_intersections = unexplored()
+      if unexplored_intersections:
+        print("EXPLORED: ", unexplored_intersections[0].lon, unexplored_intersections[0].lat, unexplored_intersections[0].streets)
+        cur = self.goToTarget(unexplored_intersections[0])
+        print(cur.streets)
+        for i in range(4):
+          if cur.streets[i] == UNEXPLORED:
+            direction = i
+            break
+        # self.dijkstra(unexplored_intersections[0].lon, unexplored_intersections[0].lat)
+        # direction = cur.headingToTarget
+      # Otherwise, the whole map is already explored
+      else:
+        print("Finished Exploring the Map!")
+        return
       self.turnTo(direction)
       heading = direction
       self.motor.stop()
 
     # Update lastintersection
     lastintersecion = cur
-    print(cur.streets)
   
+  def dijkstra(self, target_lon, target_lat):
+    """ Set headings of intersections according to desired target intersection """
+    print('Set Headings to target', target_lon, target_lat)
+    global lon, lat
+    # Clear all headingToTarget directions stored in all intersections
+    for i in intersections:
+      i.headingToTarget = None
+    # Get the target intersection
+    target = intersection(target_lon, target_lat)
+    # Initialize the "to be processed" intersections list with the target
+    inters_to_process = [target]
+    # Iterating lon, lat to go through the intersections. Start at target intersection
+    curlon, curlat = target_lon, target_lat
+    # Loop through until we get back to the original start intersection
+    while (curlon, curlat) != (lon, lat):
+      # Pop the first element of the to-be-processed list as temporary target
+      tempTarget = inters_to_process.pop(0)
+      # Get the coordinates of this temporary target
+      curlon, curlat = tempTarget.lon, tempTarget.lat
+      # Get the list of directions to intersections connected to temporary target
+      tempConnectedStreets = [i for i, x in enumerate(tempTarget.streets) if x == CONNECTED]
+      # For each connected intersection of the temporary target:
+      for dir in tempConnectedStreets:
+        # Get the connected intersection object and coordinates
+        conn_lon, conn_lat = shift(curlon, curlat, dir)
+        tempConnected = intersection(conn_lon, conn_lat)
+        if tempConnected.headingToTarget is None:
+          # If the connected intersection does not have a headingToTarget:
+          # Set the heading so it points back to the temporary target
+          # Append the connected intersection to to-be-processed list
+          tempConnected.headingToTarget = (dir + 2) % 4
+          inters_to_process.append(tempConnected)
+    target.headingToTarget = STOP
+
   def returnToTarget(self):
     global lon, lat, heading
     cur = intersection(lon, lat)
@@ -237,11 +311,25 @@ class GridFollow:
     # Calculate new coordinates
     lon, lat = shift(lon, lat, heading)
 
-  def exploreAndReturn(self):
-    for _ in range(2):
-      self.explore()
-    for _ in range(2):
+  def goToTarget(self, target):
+    target_lon = target.lon
+    target_lat = target.lat
+    cur = intersection(lon, lat)
+    self.dijkstra(target_lon, target_lat)
+    while cur.headingToTarget is not STOP:
       self.returnToTarget()
+      cur = intersection(lon, lat)
+    return cur
+
+  def exploreAndReturn(self):
+    for _ in range(5):
+      self.explore()
+    for _ in range(4):
+      self.returnToTarget()
+  
+  def exploreWholeMap(self):
+    while not searchcomplete():
+      self.explore()
 
   def shutdown(self):
     self.line.shutdown()
@@ -299,24 +387,37 @@ def intersection(lon, lat):
     raise Exception("Multiple intersections at (%2d,%2d)" % (lon, lat))
   return list[0]
 
+# Return list of unexplored intersections, in the order of nearest to farthest
+def unexplored():
+  unexplored_intersects = [i for i in intersections
+  if any([s==UNEXPLORED for s in i.streets])]
+  # Sort list of unexplored intersections from nearest to farthest
+  unexplored_intersects = sorted(unexplored_intersects, key=lambda intersect: (intersect.lon - lon)**2 + (intersect.lat - lat)**2)
+
+  return unexplored_intersects
+
+# Return true if all intersections have been mapped, otherwise false
+def searchcomplete():
+  global intersections
+  if intersections:
+    complete = True
+    for intersection in intersections:
+      if UNKNOWN in intersection.streets or UNEXPLORED in intersection.streets:
+        complete = False
+  else:
+    complete = False
+  return complete
+
 if __name__ == "__main__":
   grid = GridFollow()
   #grid.turn(1)
   #grid.drive_sequence(['L', 'R', 'R', 'R', 'F'])
   #grid.drive_sequence(['R', 'L', 'L', 'L', 'F'])
   try:
-    grid.explore()
-    grid.explore()
-    grid.explore()
-    grid.returnToTarget()
-    grid.returnToTarget()
-
-    # grid.driveStraight()
-    # grid.spincheck()
-    # grid.driveStraight()
-    # time.sleep(1)
-    # streets = grid.spincheck()
-    # print(streets)
+    # grid.calibrateTurn()
+    # grid.exploreWholeMap()
+    #grid.exploreAndReturn()
+    grid.turn90()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
     grid.shutdown()
