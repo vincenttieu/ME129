@@ -1,23 +1,28 @@
-from turtle import right
 import pigpio
 import sys
 import time
 import threading
+import random
 
 US1_TRIGGER = 13
 US2_TRIGGER = 19
 US3_TRIGGER = 26
+
+US_TRIGGERS = [US1_TRIGGER, US2_TRIGGER, US3_TRIGGER]
+
 US1_ECHO = 16
 US2_ECHO = 20
 US3_ECHO = 21
+
+US_ECHOS = [US1_ECHO, US2_ECHO, US3_ECHO]
 
 US1_RISING_TIME = 0
 US2_RISING_TIME = 0
 US3_RISING_TIME = 0
 
-GPIO_INDEX = {16: 0, 20: 1, 21: 2}
+GPIO_INDEX = {US1_ECHO: 0, US2_ECHO: 1, US3_ECHO: 2}
 
-TRIGGER_DURATION = 0.00001
+TRIGGER_DURATION = 20e-6
 
 HIGH = 1
 LOW = 0
@@ -36,61 +41,80 @@ class Ultrasound:
     self.io.set_mode(US2_ECHO, pigpio.INPUT)
     self.io.set_mode(US3_ECHO, pigpio.INPUT)
 
+    
+    self.io.set_pull_up_down(US1_ECHO, pigpio.PUD_DOWN)
+    self.io.set_pull_up_down(US2_ECHO, pigpio.PUD_DOWN)
+    self.io.set_pull_up_down(US3_ECHO, pigpio.PUD_DOWN)
+
     # Ultrasound variables
     self.distance = [0,0,0]
     self.rising_edge = [0,0,0]
 
     # Set callback functions
-    self.cbrise = self.io.callback(US2_ECHO, pigpio.RISING_EDGE, self.rising)
-    self.cbfall = self.io.callback(US2_ECHO, pigpio.FALLING_EDGE, self.falling)
+    self.cbrise0 = self.io.callback(US1_ECHO, pigpio.RISING_EDGE, self.rising)
+    self.cbrise1 = self.io.callback(US2_ECHO, pigpio.RISING_EDGE, self.rising)
+    self.cbrise2 = self.io.callback(US3_ECHO, pigpio.RISING_EDGE, self.rising)
+    self.cbfall0 = self.io.callback(US1_ECHO, pigpio.FALLING_EDGE, self.falling)
+    self.cbfall1 = self.io.callback(US2_ECHO, pigpio.FALLING_EDGE, self.falling)
+    self.cbfall2 = self.io.callback(US3_ECHO, pigpio.FALLING_EDGE, self.falling)
 
     # Set timer to read ultrasound sensors every 100 ms.
-    self.readUltrasound()
+    self.thread = threading.Thread(target=self.runcontinual)
+    self.thread.start()
 
   # Pull trigger high for 10 us
   def trigger(self):
-    self.io.write(US1_TRIGGER, HIGH)
-    time.sleep(TRIGGER_DURATION)
-    self.io.write(US1_TRIGGER, LOW)
+    for i in range(3):
+      self.io.write(US_TRIGGERS[i], HIGH)
 
-    self.io.write(US2_TRIGGER, HIGH)
     time.sleep(TRIGGER_DURATION)
-    self.io.write(US2_TRIGGER, LOW)
 
-    self.io.write(US3_TRIGGER, HIGH)
-    time.sleep(TRIGGER_DURATION)
-    self.io.write(US3_TRIGGER, LOW)
+    for i in range(3):
+      self.io.write(US_TRIGGERS[i], LOW)
 
   # read ultrasound sensors
-  def readUltrasound(self):
-    self.trigger()
-    threading.Timer(1, self.readUltrasound).start()
+  def stopcontinual(self):
+    self.stopflag = True
 
-  def shutdown(self):
-    self.cbrise.cancel()
-    self.cbfall.cancel()
+  def runcontinual(self):
+    self.stopflag = False
+    while not self.stopflag:
+      self.trigger()
+      time.sleep(0.1)
 
   def rising(self, gpio, level, tick):
-    print(gpio)
-    if gpio == 16:
-      self.rising_edge[0] = tick
-    if gpio == 20:
-      self.rising_edge[1] = tick
-    if gpio == 21:
-      self.rising_edge[2] = tick
+    # store the rising edge timing
+    index = GPIO_INDEX[gpio]
+    self.rising_edge[index] = tick
 
   def falling(self, gpio, level, tick):
     index = GPIO_INDEX[gpio]
-    t = (tick - self.rising_edge[index]) / 1e6
+    t = float(tick - self.rising_edge[index]) / 1e6
     distance = 343 * t/2 * 100 # in cm
     self.distance[index] = distance
 
-def foo():
-    print(time.ctime())
-    threading.Timer(1, foo).start()
+  def shutdown(self):
+    self.stopcontinual()
+    self.thread.join()
+
+    self.cbrise0.cancel()
+    self.cbrise1.cancel()
+    self.cbrise2.cancel()
+    self.cbfall0.cancel()
+    self.cbfall1.cancel()
+    self.cbfall2.cancel()
+    self.io.stop()
 
 if __name__ == "__main__":
-  US = Ultrasound()
-  while True:
-    print(US.distance)
-    time.sleep(1)
+  try:
+    US = Ultrasound()
+    while True:
+      print("Left: {:5.2f}, Mid: {:5.2f}, Right: {:5.2f}".format(US.distance[0], US.distance[1], US.distance[2]))
+      # print(US.distance[1])
+      time.sleep(0.1)
+  except KeyboardInterrupt:
+    print("Ending due to keyboard interrupt")
+    US.shutdown()
+  except Exception as e:
+    print("Ending due to exception: %s" % repr(e))
+    US.shutdown()
