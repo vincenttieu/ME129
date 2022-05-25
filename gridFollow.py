@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 
-from multiprocessing.sharedctypes import Value
-from turtle import right
 import pigpio
 import sys
 import time
-import math
 import random
-from collections import deque
-from collections import Counter
+import threading
 from motor import Motor
 from linefollow_simp import LineReaderSimp
 from angle import angle
+import pickle
 
 NORTH = 0
 WEST  = 1
@@ -19,7 +16,7 @@ SOUTH = 2
 EAST  = 3
 STOP  = 'STOP'
 HEADING = {NORTH:'North', WEST:'West', SOUTH:'South',
-           EAST:'East', None:'None'} # For printing
+           EAST:'East', None:'None', STOP:'STOP'} # For printing
 
 # Street status
 UNKNOWN    = 'Unknown'
@@ -37,19 +34,25 @@ heading = NORTH        # Current heading
 
 class GridFollow:
   def __init__(self):
+    # Initialize motor, line following, and gyro
     self.motor = Motor()
     self.line = LineReaderSimp()
     self.gyro = angle()
 
-    # Drive Straight
-    self.time_after_int = 0.4
-    self.v_after_int = 20
+    # Calibrate the following
+    self.time_after_int = 0.5 # pwm
+    self.v_after_int = 20 # ms
+    self.turn_speed = 0.7 # pwm
+    self.turn_speed_slow = 0.4 # pwm
 
-    # Turn method
-    self.turn_angular_speed = 120
+    # driving thread flags
+    self.driving_stopflag = False
+    self.driving_pause = False
+
+    self.target = None
+
 
   def driveStraight(self):
-    starttime = time.time()
     while True:
       linear, angular = self.line.steer()
       self.motor.setvel(linear, angular)
@@ -61,28 +64,6 @@ class GridFollow:
     time.sleep(self.time_after_int)
     # Stop the motors
     self.motor.stop()
-    # Record the end time
-    endtime = time.time()
-    # Return the total time elapsed to reach intersection
-    return starttime - endtime
-
-  def turn(self, turn_magnitude):
-    """ Turns the robot a given amount, with turn_magnitude the following:
-    0 for no turn, 1 for left (90 degrees), 2 for backwards (180 degrees), 3 for right (270 degrees)"""
-    # Set motor angular speed
-    # We are turning at angular speed of 90 deg/s
-    turn_magnitude = turn_magnitude % 4
-    if turn_magnitude >= 0 and turn_magnitude <= 2:
-      self.motor.setspin(self.turn_angular_speed)
-      time.sleep(turn_magnitude * 90 / self.turn_angular_speed)
-    elif turn_magnitude > 2 and turn_magnitude < 4:
-      self.motor.setspin(-(self.turn_angular_speed))
-      time.sleep((4 - turn_magnitude) * 90 / self.turn_angular_speed)
-    else:
-      print('Turn Magnitude Out of Range!')
-      raise ValueError
-    # Stop the motor
-    self.motor.setspin(0)
 
   def turnTo(self, direction):
     global heading
@@ -90,7 +71,7 @@ class GridFollow:
     
     turn = (direction - heading) % 4
     if turn == 0:
-      pass
+      return
     elif turn == 1:
       self.turnToNextLine()
     elif turn == 2:
@@ -98,47 +79,36 @@ class GridFollow:
       while turned < 2:
         turned += self.turnToNextLine()
     else:
-      self.turnToNextLine(direction=-1)
+      self.turnToNextLine(dir=-1)
 
     heading = direction
 
-  def turnToNextLine(self, direction=1):
+  def turnToNextLine(self, dir=1):
     # turn to the next line
     # direction =  1 -> counter-clockwise
     # direction = -1 -> clockwise
     global heading
-    start_time = time.time()
-    
-    # Starting kick for 20ms
-    self.motor.set(-direction, direction)
-    time.sleep(0.05)
 
-    self.motor.setspin(direction * self.turn_angular_speed)
-    time.sleep(0.4)
+    self.gyro.reset() # resets the gyro to prevent error from accumulating
+    angle = 0
+
+    self.motor.set(-dir*self.turn_speed, dir*self.turn_speed)
     while True:
-      if self.line.read_state_raw() == (0,1,0):
-        break
-    used_time = time.time() - start_time
-    print(used_time)
-    # The numbers used here are calibrated
-    if used_time < 1.02:
-      return 1
-    elif 1.02 <= used_time < 1.68:
-      return 2
-    elif 1.68 <= used_time < 2.5:
-      return 3
-    else:
-      return 4
-
-  def drive_sequence(self, turn_sequence):
-    """ Drives the robot according to a known sequence
-    turn_sequence = List of strings, 'L' is left turn, 'F' is forward, 'R' is right turn
-    """
-    self.driveStraight()
-    turns = {'L':1, 'F':0, 'R':3, 'B':2}
-    for turn in turn_sequence:
-      self.turn(turns.get(turn, 'F'))
-      self.driveStraight()
+      angle = abs(self.gyro.angle)
+      reading = self.line.read_state_raw()
+      #print(reading)
+      if angle > 20:
+        if reading == (0,1,0):
+          self.motor.stop()
+          break
+        elif reading in [(1,1,0),(0,1,1)]:
+          self.motor.set(-dir*self.turn_speed_slow, dir*self.turn_speed_slow)
+    
+    turned = (angle+45) // 90
+    if turned < 1 or turned > 4:
+      print("Turned ", turned)
+      raise ValueError()
+    return int((angle+45) // 90)
 
   def wait(self):
     self.motor.stop()
@@ -173,11 +143,6 @@ class GridFollow:
       streets[total_turned%4] = True
 
     return streets
-
-  def calibrateTurn(self):
-    while True:
-      self.turnToNextLine()
-      self.wait()
       
   def explore(self):
     # Drive straight until next intersection
@@ -188,7 +153,7 @@ class GridFollow:
     # Calculate new coordinates
     global lon, lat, heading
     lon, lat = shift(lon, lat, heading)
-    print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
+    # print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
 
     # Check if current intersection already exists
     cur = intersection(lon, lat)
@@ -242,9 +207,9 @@ class GridFollow:
       # Set the headingToTargets to the nearest unexplored intersection
       unexplored_intersections = unexplored()
       if unexplored_intersections:
-        print("EXPLORED: ", unexplored_intersections[0].lon, unexplored_intersections[0].lat, unexplored_intersections[0].streets)
+        # print("EXPLORED: ", unexplored_intersections[0].lon, unexplored_intersections[0].lat, unexplored_intersections[0].streets)
         cur = self.goToTarget(unexplored_intersections[0])
-        print(cur.streets)
+        # print(cur.streets)
         for i in range(4):
           if cur.streets[i] == UNEXPLORED:
             direction = i
@@ -271,6 +236,7 @@ class GridFollow:
       i.headingToTarget = None
     # Get the target intersection
     target = intersection(target_lon, target_lat)
+    print(target)
     # Initialize the "to be processed" intersections list with the target
     inters_to_process = [target]
     # Iterating lon, lat to go through the intersections. Start at target intersection
@@ -328,12 +294,34 @@ class GridFollow:
       self.returnToTarget()
   
   def exploreWholeMap(self):
-    while not searchcomplete():
-      self.explore()
+    self.thread = threading.Thread(target=self.driving_loop)
+    self.thread.start()
+
+  def driving_stop(self):
+    self.driving_stopflag = True
+
+  def driving_goto(self, target):
+    self.target = target
+  
+  def driving_loop(self):
+    self.driving_stopflag = False
+    # if the thread is not stopped or the map isn't fully explored
+    while (not self.driving_stopflag):# and (not searchcomplete()):
+      # Pause at this intersection, if requested
+      if not self.driving_pause:
+        self.explore()
+      if self.target:
+        self.goToTarget(self.target)
+        self.target = None
 
   def shutdown(self):
+    self.driving_stop()
+    self.thread.join()
+    self.motor.stop()
+
     self.line.shutdown()
     self.motor.shutdown()
+    self.gyro.shutdown()
     
 class Intersection:
   # Initialize - create new intersection at (lon, lat)
@@ -408,19 +396,78 @@ def searchcomplete():
     complete = False
   return complete
 
+def userInput(grid):
+  global intersections, lastintersecion, lon, lat, heading
+  # Grab a command
+  command = input("Command ? ")
+  command = command.strip()
+  # Compare against possible commands.
+  if (command == 'pause'):
+    print("Pausing at the next intersection")
+    grid.driving_pause = True
+  elif (command == 'explore'):
+    print("Exploring without a target")
+    grid.driving_pause = False
+  elif (command[:4] == 'goto'):
+    grid.driving_pause = True
+    coord = command.split(" ")
+    target = intersection(int(coord[1]), int(coord[2]))
+    if not target:
+      print("Not a valid position!")
+    else:
+      grid.driving_goto(target)
+  elif (command == 'save'):
+    filename = input('Input the name you want to save the map as: ')
+    print("Saving the map...")
+    
+    with open(filename+'.pickle', 'wb') as file:
+      pickle.dump(intersections, file)
+  
+  elif (command == 'load'):
+    filename = input('Type in the name of the map you want to load: ')
+    print('Loading the map')
+    try:
+      with open(filename+'.pickle', 'rb') as file:
+        intersections = pickle.load(file)
+      lastintersecion = None
+      cur_loc = input("Input the current location on map: ")
+      cur_coord = cur_loc.split(" ")
+      lon = int(cur_coord[0])
+      lat = int(cur_coord[1])
+      print(lon, lat)
+      cur_heading = input("Input the current heading (0 to 3)")
+      heading = int(cur_heading)
+    except FileNotFoundError:
+      print("File {}.pickle was not found.".format(filename))
+    
+  
+  elif (command == 'home'):
+    print("Restarting the robot at the home position")
+    lon = 0
+    lat = 0
+
+  elif (command == 'print'):
+    print(intersections)
+  elif (command == 'quit'):
+    print("Quitting...")
+    return True
+
+
+  else:
+    print("Unknown command '%s'" % command)
+  return False
+
 if __name__ == "__main__":
   grid = GridFollow()
-  #grid.turn(1)
-  #grid.drive_sequence(['L', 'R', 'R', 'R', 'F'])
-  #grid.drive_sequence(['R', 'L', 'L', 'L', 'F'])
+  grid.exploreWholeMap()
   try:
-    # grid.calibrateTurn()
-    # grid.exploreWholeMap()
-    #grid.exploreAndReturn()
-    grid.turn90()
+    while True:
+      quit = userInput(grid)
+      if quit:
+        break
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
-    grid.shutdown()
   except Exception as e:
     print("Ending due to exception: %s" % repr(e))
-    grid.shutdown()
+
+  grid.shutdown()

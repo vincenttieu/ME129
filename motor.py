@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-from turtle import right
 import pigpio
 import sys
 import time
@@ -135,41 +134,12 @@ class Motor():
   
   def stop(self):
     self.set(0,0)
-    
-def line():
-  motor.setlinear(25)
-  time.sleep(1)
-  motor.setspin(180)
-  time.sleep(1)
-  motor.setlinear(25)
-  time.sleep(1)
-  motor.setspin(180)
-  time.sleep(1)
-
-def triangle():  
-  motor.setlinear(25)
-  time.sleep(1)
-  motor.setspin(120)
-  time.sleep(1)
-  motor.setlinear(25)
-  time.sleep(1)
-  motor.setspin(120)
-  time.sleep(1)
-  motor.setlinear(25)
-  time.sleep(1)
-  motor.setspin(120)
-  time.sleep(1)
-
-def circle ():
-  motor.setvel(50*3.14/12, 360/12)
-  time.sleep(12)  
 
 if __name__ == "__main__":
   motor = Motor()
   try:
     motor.setspin(90)
     time.sleep(4)
-  
     motor.shutdown()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")

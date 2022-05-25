@@ -2,7 +2,6 @@ import pigpio
 import sys
 import time
 import threading
-import random
 
 US1_TRIGGER = 13
 US2_TRIGGER = 19
@@ -110,7 +109,6 @@ if __name__ == "__main__":
     US = Ultrasound()
     while True:
       print("Left: {:5.2f}, Mid: {:5.2f}, Right: {:5.2f}".format(US.distance[0], US.distance[1], US.distance[2]))
-      # print(US.distance[1])
       time.sleep(0.1)
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")

@@ -9,20 +9,12 @@ import math
 from collections import deque
 from collections import Counter
 from motor import Motor
+from irsensor import IRSensor
 
-LF_SENSOR = 14
-CT_SENSOR = 15
-RT_SENSOR = 18
 
 class LineReader():
   def __init__(self):
-    self.io = pigpio.pi()
-    if not self.io.connected:
-      print("Unable to connection to pigpio daemon!")
-      sys.exit(0)
-    self.io.set_mode(LF_SENSOR, pigpio.INPUT)
-    self.io.set_mode(CT_SENSOR, pigpio.INPUT)
-    self.io.set_mode(RT_SENSOR, pigpio.INPUT)
+    self.irsensor = IRSensor()
 
     # State of robot
     self.edge = 'C'
@@ -50,10 +42,7 @@ class LineReader():
     self.queue = deque()
 
   def read_state_raw(self):
-    lf_state = self.io.read(LF_SENSOR)
-    ct_state = self.io.read(CT_SENSOR)
-    rt_state = self.io.read(RT_SENSOR)
-    return (int(lf_state), int(ct_state), int(rt_state))
+    return self.irsensor.read_state_raw()
 
   def steer(self):
     """ Returns linear, steer
@@ -66,7 +55,7 @@ class LineReader():
 
     Sign Convention: Linear: forward = positive, Angular: positive = CCW / left turn
     """
-    raw_state = self.read_state_raw()
+    raw_state = self.irsensor.read_state_raw()
     # If a line is detected, set lost to false
     if 1 in raw_state:
       self.lost = False

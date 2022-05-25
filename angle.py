@@ -2,7 +2,7 @@ import time
 import math
 from mpu9250_jmdev.registers import *
 from mpu9250_jmdev.mpu_9250 import MPU9250
-
+import threading
 
 
 class angle:
@@ -22,7 +22,13 @@ class angle:
     self.calibrate()
     self.last_read = time.time()
     self.angle = 0
-    
+
+    self.stopflag = False
+    self.resetflag = False
+
+    self.thread = threading.Thread(target=self.readAngle_loop)
+    self.thread.start()
+
     # self.offset = self.calibrate()self.mpu.readGyroscopeMaster()[2]
 
   def calibrate(self, samples=100):
@@ -49,6 +55,18 @@ class angle:
   
   def resetTime(self):
     self.last_read = time.time()
+
+  def readAngle_stop(self):
+    self.stopflag = True
+
+  def readAngle_loop(self):
+    self.stopflag = False
+    while not self.stopflag:
+      self.readAngle()
+
+  def shutdown(self):
+    self.readAngle_stop()
+    self.thread.join()
 
 if __name__ == "__main__": 
   ang = angle()

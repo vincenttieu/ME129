@@ -24,7 +24,6 @@ class WallFollow:
   def herding(self, d=20):
     while True:
       obstacles = [self.US.distance[0]<d, self.US.distance[1]<d, self.US.distance[2]<d]
-      print(obstacles)
       # If something is in the way in front and the sides, go backwards straight
       if obstacles in [[True, True, True], [False, True, False]]:
         self.motor.set(-FWD_VEL, -FWD_VEL)
@@ -43,7 +42,6 @@ class WallFollow:
       # If something is to the right and in front, backwards 
       elif obstacles == [False, True, True]:
           self.motor.set(-FWD_VEL, FWD_VEL)
-      time.sleep(0.5)
 
   def move(self, u):
     PWM_left = max(0.5, min(0.9, 0.7 - u))
@@ -62,8 +60,6 @@ class WallFollow:
     self.motor.stop()
     print('Obstacle')
     
-
-
   def shutdown(self):
     self.motor.shutdown()
     self.US.shutdown()
@@ -71,7 +67,7 @@ class WallFollow:
 if __name__ == "__main__":
   try:
     wf = WallFollow()
-    #wf.herding()
+    # wf.herding()
     wf.wallFollow()
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
@@ -79,9 +75,3 @@ if __name__ == "__main__":
   except Exception as e:
     print("Ending due to exception: %s" % repr(e))
     wf.shutdown()
-
-
-
-        
-      
-
