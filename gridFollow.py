@@ -8,6 +8,7 @@ import threading
 from motor import Motor
 from linefollow_simp import LineReaderSimp
 from angle import angle
+from ultrasound import Ultrasound
 import pickle
 
 NORTH = 0
@@ -35,9 +36,11 @@ heading = NORTH        # Current heading
 class GridFollow:
   def __init__(self):
     # Initialize motor, line following, and gyro
-    self.motor = Motor()
-    self.line = LineReaderSimp()
+    self.io = pigpio.pi()
+    self.motor = Motor(self.io)
+    self.line = LineReaderSimp(self.io)
     self.gyro = angle()
+    self.us = Ultrasound(self.io)
 
     # Calibrate the following
     self.time_after_int = 0.5 # pwm
@@ -53,17 +56,54 @@ class GridFollow:
 
 
   def driveStraight(self):
+    global lon, lat, heading
+    # if the new intersection has been visited before 
+    visited = True
     while True:
       linear, angular = self.line.steer()
       self.motor.setvel(linear, angular)
       # Break out of the loop once we reached intersection
       if linear == 0 and angular == 0:
+        result = "REACHED"
+        # Calculate new coordinates
+        lon, lat = shift(lon, lat, heading)
         break
+
+      # if self.us.distance[1] < 20:
+      #   result = "STOPPED"
+      #   break
+
+    if result == "REACHED":
+      # Check obstacles
+      cur = intersection(lon, lat)
+      if not cur:
+        visited = False
+        cur = Intersection(lon, lat)
+        # print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
+
+      # Update blocked status for the current intersection and its neighbors
+      for i in range(4):
+        dir = (heading-1+i)%4
+        if i == 3:
+          ifBlocked = False
+        else:
+          ifBlocked = self.us.distance[i] < 60
+        cur.blocked[dir] = ifBlocked
+        neighborLon, neighborLat = shift(lon, lat, dir)
+        neighbor = intersection(neighborLon, neighborLat)
+        if neighbor:
+          neighbor.blocked[(dir+2)%4] = ifBlocked
+
       # Drive for a bit after the intersection
-    self.motor.setvel(self.v_after_int, 0)
-    time.sleep(self.time_after_int)
-    # Stop the motors
-    self.motor.stop()
+      self.motor.setvel(self.v_after_int, 0)
+      time.sleep(self.time_after_int)
+      # Stop the motors
+      self.motor.stop()
+    else:
+      self.turnToNextLine()
+      self.driveStraight()
+
+    return visited
 
   def turnTo(self, direction):
     global heading
@@ -94,21 +134,20 @@ class GridFollow:
 
     self.motor.set(-dir*self.turn_speed, dir*self.turn_speed)
     while True:
-      angle = abs(self.gyro.angle)
+      angle = abs(self.gyro.readAngle())
       reading = self.line.read_state_raw()
-      #print(reading)
-      if angle > 20:
-        if reading == (0,1,0):
+      if angle > 30:
+        if (dir == 1 and reading in [(1,0,0), (1,1,0), [0,1,0]]) or (dir == -1 and reading in [(0,0,1), (0,1,1), (0,1,0)]):
           self.motor.stop()
           break
-        elif reading in [(1,1,0),(0,1,1)]:
-          self.motor.set(-dir*self.turn_speed_slow, dir*self.turn_speed_slow)
-    
+
+    # wait for robot to come to a full stop
+    st = time.time()
+    while time.time() - st < 0.5:
+      angle = abs(self.gyro.readAngle())
     turned = (angle+45) // 90
-    if turned < 1 or turned > 4:
-      print("Turned ", turned)
-      raise ValueError()
-    return int((angle+45) // 90)
+    turned = max(min(turned, 4),1)
+    return int(turned)
 
   def wait(self):
     self.motor.stop()
@@ -135,7 +174,7 @@ class GridFollow:
     while total_turned < 3:
       # turn to next line
       turned = self.turnToNextLine()
-      self.wait()
+      # self.wait()
       # update heading
       heading = (heading + turned) % 4
       # update total_turned
@@ -146,25 +185,19 @@ class GridFollow:
       
   def explore(self):
     # Drive straight until next intersection
-    self.driveStraight()
+    global lon, lat, heading
+    visited = self.driveStraight()
     # Fully stop
     self.wait()
 
-    # Calculate new coordinates
-    global lon, lat, heading
-    lon, lat = shift(lon, lat, heading)
-    # print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
-
-    # Check if current intersection already exists
-    cur = intersection(lon, lat)
+    # get the current intersection
+    cur = intersection(lon, lat)    
 
     # Store current heading, since spinCheck() may change the heading
     current_heading = heading
 
     # If not, create a new intersection and check surrondings
-    if not cur:
-      cur = Intersection(lon, lat)
-
+    if not visited:
       # Check and update surrounding streets
       streets = self.spinCheck()
       # Store streets in NWSE order
@@ -248,7 +281,7 @@ class GridFollow:
       # Get the coordinates of this temporary target
       curlon, curlat = tempTarget.lon, tempTarget.lat
       # Get the list of directions to intersections connected to temporary target
-      tempConnectedStreets = [i for i, x in enumerate(tempTarget.streets) if x == CONNECTED]
+      tempConnectedStreets = [i for i, x in enumerate(tempTarget.streets) if x == CONNECTED and not tempTarget.blocked[i]]
       # For each connected intersection of the temporary target:
       for dir in tempConnectedStreets:
         # Get the connected intersection object and coordinates
@@ -261,6 +294,7 @@ class GridFollow:
           tempConnected.headingToTarget = (dir + 2) % 4
           inters_to_process.append(tempConnected)
     target.headingToTarget = STOP
+    return intersection(lon, lat).headingToTarget
 
   def returnToTarget(self):
     global lon, lat, heading
@@ -274,10 +308,8 @@ class GridFollow:
     
     self.driveStraight()
 
-    # Calculate new coordinates
-    lon, lat = shift(lon, lat, heading)
-
   def goToTarget(self, target):
+    global lon, lat, heading
     target_lon = target.lon
     target_lat = target.lat
     cur = intersection(lon, lat)
@@ -285,6 +317,7 @@ class GridFollow:
     while cur.headingToTarget is not STOP:
       self.returnToTarget()
       cur = intersection(lon, lat)
+      print(lon, lat)
     return cur
 
   def exploreAndReturn(self):
@@ -294,7 +327,7 @@ class GridFollow:
       self.returnToTarget()
   
   def exploreWholeMap(self):
-    self.thread = threading.Thread(target=self.driving_loop)
+    self.thread = threading.Thread(target=self.driving_loop, name="Exploring Thread")
     self.thread.start()
 
   def driving_stop(self):
@@ -308,7 +341,7 @@ class GridFollow:
     # if the thread is not stopped or the map isn't fully explored
     while (not self.driving_stopflag):# and (not searchcomplete()):
       # Pause at this intersection, if requested
-      if not self.driving_pause:
+      if not self.driving_pause and not searchcomplete():
         self.explore()
       if self.target:
         self.goToTarget(self.target)
@@ -321,7 +354,8 @@ class GridFollow:
 
     self.line.shutdown()
     self.motor.shutdown()
-    self.gyro.shutdown()
+    self.us.shutdown()
+    self.io.stop()
     
 class Intersection:
   # Initialize - create new intersection at (lon, lat)
@@ -332,6 +366,7 @@ class Intersection:
     self.neighbors = [None, None, None, None]
     # Status of streets at the intersection, in NWSE directions.
     self.streets = [UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN]
+    self.blocked = [False, False, False, False]
     # Direction to head from this intersection in planned move.
     self.headingToTarget = None
 
@@ -419,10 +454,8 @@ def userInput(grid):
   elif (command == 'save'):
     filename = input('Input the name you want to save the map as: ')
     print("Saving the map...")
-    
     with open(filename+'.pickle', 'wb') as file:
       pickle.dump(intersections, file)
-  
   elif (command == 'load'):
     filename = input('Type in the name of the map you want to load: ')
     print('Loading the map')
@@ -439,27 +472,22 @@ def userInput(grid):
       heading = int(cur_heading)
     except FileNotFoundError:
       print("File {}.pickle was not found.".format(filename))
-    
-  
   elif (command == 'home'):
     print("Restarting the robot at the home position")
     lon = 0
     lat = 0
-
   elif (command == 'print'):
     print(intersections)
   elif (command == 'quit'):
     print("Quitting...")
     return True
-
-
   else:
     print("Unknown command '%s'" % command)
   return False
 
 if __name__ == "__main__":
   grid = GridFollow()
-  grid.exploreWholeMap()
+  grid.exploreWholeMap()                                                      
   try:
     while True:
       quit = userInput(grid)
