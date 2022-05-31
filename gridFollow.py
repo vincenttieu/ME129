@@ -54,6 +54,7 @@ class GridFollow:
 
     self.target = None
 
+    time.sleep(0.5)
 
   def driveStraight(self):
     global lon, lat, heading
@@ -69,9 +70,9 @@ class GridFollow:
         lon, lat = shift(lon, lat, heading)
         break
 
-      # if self.us.distance[1] < 20:
-      #   result = "STOPPED"
-      #   break
+      if self.us.distance[1] < 20:
+        result = "STOPPED"
+        break
 
     if result == "REACHED":
       # Check obstacles
@@ -83,11 +84,11 @@ class GridFollow:
 
       # Update blocked status for the current intersection and its neighbors
       for i in range(4):
-        dir = (heading-1+i)%4
+        dir = (heading+1-i)%4
         if i == 3:
           ifBlocked = False
         else:
-          ifBlocked = self.us.distance[i] < 60
+          ifBlocked = self.us.distance[i] < 30
         cur.blocked[dir] = ifBlocked
         neighborLon, neighborLat = shift(lon, lat, dir)
         neighbor = intersection(neighborLon, neighborLat)
@@ -237,7 +238,7 @@ class GridFollow:
     # Else, randomly go to a connected street
     else:
       # If there are still unexplored intersections, use Dijkstra's algorithm to deterministically explore
-      # Set the headingToTargets to the nearest unexplored intersection
+      # Set the headingToTargets to the nearestt unexplored intersection
       unexplored_intersections = unexplored()
       if unexplored_intersections:
         # print("EXPLORED: ", unexplored_intersections[0].lon, unexplored_intersections[0].lat, unexplored_intersections[0].streets)
@@ -269,13 +270,15 @@ class GridFollow:
       i.headingToTarget = None
     # Get the target intersection
     target = intersection(target_lon, target_lat)
-    print(target)
     # Initialize the "to be processed" intersections list with the target
     inters_to_process = [target]
     # Iterating lon, lat to go through the intersections. Start at target intersection
     curlon, curlat = target_lon, target_lat
     # Loop through until we get back to the original start intersection
     while (curlon, curlat) != (lon, lat):
+      if not inters_to_process:
+        print("No way to get to target!")
+        raise ValueError
       # Pop the first element of the to-be-processed list as temporary target
       tempTarget = inters_to_process.pop(0)
       # Get the coordinates of this temporary target
@@ -305,20 +308,18 @@ class GridFollow:
     
     direction = cur.headingToTarget
     self.turnTo(direction)
-    
     self.driveStraight()
 
   def goToTarget(self, target):
     global lon, lat, heading
     target_lon = target.lon
     target_lat = target.lat
-    cur = intersection(lon, lat)
-    self.dijkstra(target_lon, target_lat)
-    while cur.headingToTarget is not STOP:
-      self.returnToTarget()
-      cur = intersection(lon, lat)
-      print(lon, lat)
-    return cur
+    dir = self.dijkstra(target_lon, target_lat)
+    while (lon, lat) != (target_lon, target_lat):
+      self.turnTo(dir)
+      self.driveStraight()
+      dir = self.dijkstra(target_lon, target_lat)
+    return intersection(lon, lat)
 
   def exploreAndReturn(self):
     for _ in range(5):
@@ -367,6 +368,7 @@ class Intersection:
     # Status of streets at the intersection, in NWSE directions.
     self.streets = [UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN]
     self.blocked = [False, False, False, False]
+    self.blockedIntersection = False
     # Direction to head from this intersection in planned move.
     self.headingToTarget = None
 
@@ -385,7 +387,9 @@ class Intersection:
     return ("(%2d, %2d) N:%s W:%s S:%s E:%s - head %s\n" %
             (self.lon, self.lat, self.streets[0],
               self.streets[1], self.streets[2], self.streets[3],
-              HEADING[self.headingToTarget]))
+              HEADING[self.headingToTarget])) + ("N:%s W:%s S:%s E:%s\n" %
+            (self.blocked[0], self.blocked[1], self.blocked[2], self.blocked[3]))
+              
 
 # Helper functions
 # New longitude/latitude value after a step in the given heading.
@@ -478,6 +482,7 @@ def userInput(grid):
     lat = 0
   elif (command == 'print'):
     print(intersections)
+    print()
   elif (command == 'quit'):
     print("Quitting...")
     return True
