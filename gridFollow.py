@@ -59,7 +59,7 @@ class GridFollow:
     time.sleep(0.5)
 
   def driveStraight(self):
-    global lon, lat, heading
+    global lon, lat, heading, lastintersecion
     # if the new intersection has been visited before 
     visited = True
     while True:
@@ -71,7 +71,7 @@ class GridFollow:
         # Calculate new coordinates
         break
 
-      if self.us.distance[1] < 20:
+      if self.us.distance[1] < 10:
         result = "STOPPED"
         break
     
@@ -96,6 +96,8 @@ class GridFollow:
           neighbor.blocked[(dir+2)%4] = ifBlocked
 
     else:
+      lastintersecion = next
+      visited = True
       cur = intersection(lon, lat)
       cur.blocked[heading] = True
       next.blocked[(heading+2)%4] = True
@@ -203,7 +205,7 @@ class GridFollow:
     self.wait()
 
     # get the current intersection
-    cur = intersection(lon, lat)    
+    cur = intersection(lon, lat)
 
     # Store current heading, since spinCheck() may change the heading
     current_heading = heading
@@ -266,7 +268,6 @@ class GridFollow:
       unexplored_intersections = unexplored()
       if unexplored_intersections:
         cur = self.goToTarget(unexplored_intersections[0])
-        # print(cur.streets)
         for i in range(4):
           if cur.streets[i] == UNEXPLORED:
             direction = i
@@ -276,6 +277,7 @@ class GridFollow:
       # Otherwise, the whole map is already explored
       else:
         print("Finished Exploring the Map!")
+        self.driving_pause = True
         return
       self.turnTo(direction)
       heading = direction
@@ -286,7 +288,6 @@ class GridFollow:
   
   def dijkstra(self, target_lon, target_lat):
     """ Set headings of intersections according to desired target intersection """
-    print('Set Headings to target', target_lon, target_lat)
     global lon, lat
     # Clear all headingToTarget directions stored in all intersections
     for i in intersections:
@@ -307,13 +308,13 @@ class GridFollow:
       # Get the coordinates of this temporary target
       curlon, curlat = tempTarget.lon, tempTarget.lat
       # Get the list of directions to intersections connected to temporary target
-      tempConnectedStreets = [i for i, x in enumerate(tempTarget.streets) if x == CONNECTED and not tempTarget.blocked[i]]
+      tempConnectedStreets = [i for i, x in enumerate(tempTarget.streets) if (x == CONNECTED and not tempTarget.blocked[i])]
       # For each connected intersection of the temporary target:
       for dir in tempConnectedStreets:
         # Get the connected intersection object and coordinates
         conn_lon, conn_lat = shift(curlon, curlat, dir)
         tempConnected = intersection(conn_lon, conn_lat)
-        if tempConnected.headingToTarget is None:
+        if not tempConnected.headingToTarget:
           # If the connected intersection does not have a headingToTarget:
           # Set the heading so it points back to the temporary target
           # Append the connected intersection to to-be-processed list
@@ -365,7 +366,7 @@ class GridFollow:
     # if the thread is not stopped or the map isn't fully explored
     while (not self.driving_stopflag):# and (not searchcomplete()):
       # Pause at this intersection, if requested
-      if not self.driving_pause and not searchcomplete():
+      if not self.driving_pause:
         self.explore()
       if self.target:
         self.goToTarget(self.target)
@@ -391,7 +392,6 @@ class Intersection:
     # Status of streets at the intersection, in NWSE directions.
     self.streets = [UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN]
     self.blocked = [False, False, False, False]
-    self.blockedIntersection = False
     # Direction to head from this intersection in planned move.
     self.headingToTarget = None
 
@@ -408,10 +408,9 @@ class Intersection:
    # Print format.
   def __repr__(self):
     return ("(%2d, %2d) N:%s W:%s S:%s E:%s - head %s\n" %
-            (self.lon, self.lat, self.streets[0],
-              self.streets[1], self.streets[2], self.streets[3],
-              HEADING[self.headingToTarget])) + ("N:%s W:%s S:%s E:%s\n" %
-            (self.blocked[0], self.blocked[1], self.blocked[2], self.blocked[3]))
+            (self.lon, self.lat, self.streets[0], self.streets[1], self.streets[2], self.streets[3],
+              HEADING[self.headingToTarget])) + ("(%2d, %2d) N:%s W:%s S:%s E:%s\n" %
+            (self.lon, self.lat, self.blocked[0], self.blocked[1], self.blocked[2], self.blocked[3]))
               
 
 # Helper functions
@@ -480,7 +479,7 @@ def userInput(grid):
     target = intersection(int(coord[1]), int(coord[2]))
     if not target:
       grid.driving_pause = False
-      targetIntersection =(int(coord[1]), int(coord[2]))
+      targetIntersection = (int(coord[1]), int(coord[2]))
       print("Outside of current map, entering directed exploration")
     else:
       grid.driving_goto(target)
@@ -526,10 +525,11 @@ if __name__ == "__main__":
     while True:
       quit = userInput(grid)
       if quit:
+        grid.shutdown()
         break
   except KeyboardInterrupt:
     print("Ending due to keyboard interrupt")
+    grid.shutdown()
   except Exception as e:
     print("Ending due to exception: %s" % repr(e))
-
-  grid.shutdown()
+    grid.shutdown()
