@@ -56,31 +56,32 @@ class GridFollow:
 
     self.target = None
 
+    self.firstTry = True
+
     time.sleep(0.5)
 
   def driveStraight(self):
     global lon, lat, heading, lastintersecion
     # if the new intersection has been visited before 
     visited = True
+    pickupTime = None
     while True:
       linear, angular = self.line.steer()
       self.motor.setvel(linear, angular)
       # Break out of the loop once we reached intersection
       if linear == 0 and angular == 0:
         result = "REACHED"
-        # Calculate new coordinates
         break
 
-      if self.us.distance[1] < 10:
-        result = "STOPPED"
+      if self.us.distance[1] < 15:
+        result = "BLOCKED"
         break
-    
+          
     nextLon, nextLat = shift(lon, lat, heading)
     next = intersection(nextLon, nextLat)
     if not next:
       visited = False
       next = Intersection(nextLon, nextLat)
-      # print("lon: {lon}, lat: {lat}, heading: {heading}".format(lon=lon, lat=lat, heading=heading))
 
     if result == "REACHED":      
       # Update blocked status for the current intersection and its neighbors
@@ -93,16 +94,29 @@ class GridFollow:
         neighborLon, neighborLat = shift(lon, lat, dir)
         neighbor = intersection(neighborLon, neighborLat)
         if neighbor:
-          neighbor.blocked[(dir+2)%4] = ifBlocked
+          if neighbor.blockedIntersection:
+            neighbor.blocked[(dir+2)%4] = True
+            next.blocked[dir] = True
+          else:
+            neighbor.blocked[(dir+2)%4] = ifBlocked
 
+    # if blocked
     else:
       lastintersecion = next
       visited = True
-      cur = intersection(lon, lat)
-      cur.blocked[heading] = True
-      next.blocked[(heading+2)%4] = True
+      next.blockedIntersection = True
+      next.blocked = [True, True, True, True]
+
+      for i in range(4):
+        neighborLon, neighborLat = shift(next.lon, next.lat, i)
+        neighbor = intersection(neighborLon, neighborLat)
+        if neighbor:
+          if neighbor.streets[(i+2)%4] != NOSTREET:
+            next.streets[i] = CONNECTED
+            neighbor.streets[(i+2)%4] = CONNECTED
+            neighbor.blocked[(i+2)%4] = True
+
       self.turnToNextLine()
-      heading = (heading + 2)%4
       while True:
         linear, angular = self.line.steer()
         self.motor.setvel(linear, angular)
@@ -133,8 +147,6 @@ class GridFollow:
     else:
       self.turnToNextLine(dir=-1)
 
-    heading = direction
-
   def turnToNextLine(self, dir=1):
     # turn to the next line
     # direction =  1 -> counter-clockwise
@@ -158,8 +170,15 @@ class GridFollow:
     while time.time() - st < 0.5:
       angle = abs(self.gyro.readAngle())
     turned = (angle+45) // 90
-    turned = max(min(turned, 4),1)
-    return int(turned)
+    turned = int(max(min(turned, 4),1))
+    heading = (heading + dir*turned)%4
+    return turned
+
+  def turnToValidLine(self, unwantedDir):
+    global heading, lon, lat
+    cur = intersection(lon, lat)
+    while (cur.streets[heading] == NOSTREET) or heading == unwantedDir:
+      self.turnToNextLine()
 
   def wait(self):
     self.motor.stop()
@@ -186,10 +205,7 @@ class GridFollow:
     while total_turned < 3:
       # turn to next line
       turned = self.turnToNextLine()
-      # self.wait()
-      # update heading
-      heading = (heading + turned) % 4
-      # update total_turned
+       # update total_turned
       total_turned += turned
       streets[total_turned%4] = True
 
@@ -226,6 +242,8 @@ class GridFollow:
             if neighbor:
               cur.streets[i] = CONNECTED
               neighbor.streets[(i+2)%4] = CONNECTED
+              if neighbor.blocked[(i+2)%4]:
+                cur.blocked[i] = True
             else:
               cur.streets[i] = UNEXPLORED
           else:
@@ -233,7 +251,7 @@ class GridFollow:
 
     # If lastintersection exists, update the relationship between lastintersection and current intersection
     global lastintersecion
-    if lastintersecion:
+    if lastintersecion and not lastintersecion.blockedIntersection:
       lastintersecion.neighbors[current_heading] = cur
       lastintersecion.streets[current_heading] = CONNECTED
       
@@ -267,9 +285,11 @@ class GridFollow:
       # Set the headingToTargets to the nearestt unexplored intersection
       unexplored_intersections = unexplored()
       if unexplored_intersections:
-        cur = self.goToTarget(unexplored_intersections[0])
+        self.goToTarget(unexplored_intersections[0])
+        cur = intersection(lon, lat)
+        direction = -1
         for i in range(4):
-          if cur.streets[i] == UNEXPLORED:
+          if (cur.streets[i] == UNEXPLORED) and not cur.blocked[i]:
             direction = i
             break
         # self.dijkstra(unexplored_intersections[0].lon, unexplored_intersections[0].lat)
@@ -277,10 +297,13 @@ class GridFollow:
       # Otherwise, the whole map is already explored
       else:
         print("Finished Exploring the Map!")
+        self.turnToNextLine()
         self.driving_pause = True
         return
-      self.turnTo(direction)
-      heading = direction
+      if direction == -1:
+        self.turnToNextLine()
+      else:
+        self.turnTo(direction)
       self.motor.stop()
 
     # Update lastintersection
@@ -302,7 +325,7 @@ class GridFollow:
     while (curlon, curlat) != (lon, lat):
       if not inters_to_process:
         print("No way to get to target!")
-        raise ValueError
+        return -1
       # Pop the first element of the to-be-processed list as temporary target
       tempTarget = inters_to_process.pop(0)
       # Get the coordinates of this temporary target
@@ -314,6 +337,8 @@ class GridFollow:
         # Get the connected intersection object and coordinates
         conn_lon, conn_lat = shift(curlon, curlat, dir)
         tempConnected = intersection(conn_lon, conn_lat)
+        if not tempConnected:
+          print("ERROR AT ", conn_lon, conn_lat)
         if not tempConnected.headingToTarget:
           # If the connected intersection does not have a headingToTarget:
           # Set the heading so it points back to the temporary target
@@ -335,21 +360,37 @@ class GridFollow:
     self.driveStraight()
 
   def goToTarget(self, target):
+    print("going to", target)
     global lon, lat, heading
     target_lon = target.lon
     target_lat = target.lat
     dir = self.dijkstra(target_lon, target_lat)
+    print("first dir", dir)
     while (lon, lat) != (target_lon, target_lat):
+      if dir == -1:
+        break
       self.turnTo(dir)
       self.driveStraight()
       dir = self.dijkstra(target_lon, target_lat)
-    return intersection(lon, lat)
 
-  def exploreAndReturn(self):
-    for _ in range(5):
-      self.explore()
-    for _ in range(4):
-      self.returnToTarget()
+    if dir == -1:
+      if self.firstTry:
+        print("first Try")
+        # clear all obstacles
+        for i in intersections:
+          i.blockedIntersection = False
+          i.blocked = [False, False, False, False]
+        self.firstTry = False
+        return self.goToTarget(target)
+      else:
+        print("second try")
+        self.driving_pause = True
+        self.firstTry = True
+        self.turnToNextLine()
+        return None 
+    
+    self.turnToNextLine()
+    return intersection(lon, lat)
   
   def exploreWholeMap(self):
     self.thread = threading.Thread(target=self.driving_loop, name="Exploring Thread")
@@ -392,6 +433,7 @@ class Intersection:
     # Status of streets at the intersection, in NWSE directions.
     self.streets = [UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN]
     self.blocked = [False, False, False, False]
+    self.blockedIntersection = False
     # Direction to head from this intersection in planned move.
     self.headingToTarget = None
 
@@ -442,8 +484,8 @@ def unexplored():
   dist_lat = lat
   if targetIntersection:
     dist_lon, dist_lat = targetIntersection
-  unexplored_intersects = [i for i in intersections
-  if any([s==UNEXPLORED for s in i.streets])]
+  unexplored_intersects = [inter for inter in intersections
+  if any([s==UNEXPLORED and not inter.blocked[i] for i, s in enumerate(inter.streets)])]
   # Sort list of unexplored intersections from nearest to farthest
   unexplored_intersects = sorted(unexplored_intersects, key=lambda intersect: (intersect.lon - dist_lon)**2 + (intersect.lat - dist_lat)**2)
 
@@ -478,6 +520,14 @@ def userInput(grid):
     coord = command.split(" ")
     target = intersection(int(coord[1]), int(coord[2]))
     if not target:
+      intersections = [i for i in intersections if not i.blockedIntersection]
+      for i in intersections:
+        for dir in range(4):
+          if i.blocked[dir] and i.streets[dir] == CONNECTED:
+            i.streets[dir] = UNEXPLORED
+        i.blocked = [False, False, False, False]
+        i.blockedIntersection = False
+        
       grid.driving_pause = False
       targetIntersection = (int(coord[1]), int(coord[2]))
       print("Outside of current map, entering directed exploration")
@@ -509,11 +559,24 @@ def userInput(grid):
     lon = 0
     lat = 0
   elif (command == 'print'):
+    print(lon, lat)
     print(intersections)
-    print()
   elif (command == 'quit'):
     print("Quitting...")
     return True
+  elif (command == "clear"):
+    print("Clearing the map")
+    lon = 0
+    lat = -1
+    heading = NORTH
+    intersections = []
+    lastintersecion = None
+  elif (command == "reset"):
+    print("Clearing the map")
+    lon = 0
+    lat = -1
+    heading = NORTH
+    lastintersecion = None
   else:
     print("Unknown command '%s'" % command)
   return False

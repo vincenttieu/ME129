@@ -27,9 +27,13 @@ HIGH = 1
 LOW = 0
 
 class Ultrasound:
-  def __init__(self):
-    # Init GPIO
-    self.io = pigpio.pi()
+  def __init__(self, io=None):
+    if io:
+      self.io = io
+      self.shutdown_flag = False
+    else:
+      self.io = pigpio.pi()
+      self.shutdown_flag = True
     if not self.io.connected:
       print("Unable to connection to pigpio daemon!")
       sys.exit(0)
@@ -102,7 +106,8 @@ class Ultrasound:
     self.cbfall0.cancel()
     self.cbfall1.cancel()
     self.cbfall2.cancel()
-    self.io.stop()
+    if self.shutdown_flag:
+      self.io.stop()
 
 if __name__ == "__main__":
   try:

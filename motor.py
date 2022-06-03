@@ -11,8 +11,13 @@ MTR2_LEGA = 5
 MTR2_LEGB = 6
 
 class Motor():
-  def __init__(self):
-    self.io = pigpio.pi()
+  def __init__(self, io=None):
+    if io:
+      self.io = io
+      self.shutdown_flag = False
+    else:
+      self.io = pigpio.pi()
+      self.shutdown_flag = True
     if not self.io.connected:
         print("Unable to connection to pigpio daemon!")
         sys.exit(0)
@@ -43,8 +48,6 @@ class Motor():
     self.io.set_PWM_dutycycle(MTR2_LEGA, 0)
     self.io.set_PWM_dutycycle(MTR2_LEGB, 0)
 
-    print("GPIO ready...")
-
   def shutdown(self):
      # Clear all pins, just in case.
     self.io.set_PWM_dutycycle(MTR1_LEGA, 0)
@@ -52,7 +55,8 @@ class Motor():
     self.io.set_PWM_dutycycle(MTR2_LEGA, 0)
     self.io.set_PWM_dutycycle(MTR2_LEGB, 0)
 
-    self.io.stop()
+    if self.shutdown_flag:
+      self.io.stop()
   
   def set(self, leftdutycycle, rightdutycycle):
     if leftdutycycle > 1 or leftdutycycle < -1 or rightdutycycle > 1 or rightdutycycle < -1:

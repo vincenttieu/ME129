@@ -13,8 +13,8 @@ from irsensor import IRSensor
 
 
 class LineReader():
-  def __init__(self):
-    self.irsensor = IRSensor()
+  def __init__(self, io=None):
+    self.irsensor = IRSensor(io)
 
     # State of robot
     self.edge = 'C'

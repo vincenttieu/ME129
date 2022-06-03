@@ -8,9 +8,9 @@ from irsensor import IRSensor
 
 
 class LineReaderSimp:
-  def __init__(self):
+  def __init__(self, io=None):
 
-    self.irsensor = IRSensor()
+    self.irsensor = IRSensor(io)
 
     # State of robot
     self.last_state = (0,0,0)
@@ -25,7 +25,7 @@ class LineReaderSimp:
 
   def read_state_raw(self):
     """ Access sensor reading from IR Sensor layer """
-    return self.irsensor.IRreading
+    return self.irsensor.read_state_raw()
 
   def steer(self):
     """ Returns linear, steer
@@ -35,7 +35,7 @@ class LineReaderSimp:
 
     Sign Convention: Linear: forward = positive, Angular: positive = CCW / left turn
     """
-    raw_state = self.irsensor.IRreading
+    raw_state = self.read_state_raw()
     if raw_state in [(1,0,1), (1,1,1)]:
       # We are at an intersection
       linear = 0

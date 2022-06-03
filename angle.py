@@ -23,14 +23,6 @@ class angle:
     self.last_read = time.time()
     self.angle = 0
 
-    self.stopflag = False
-    self.resetflag = False
-
-    self.thread = threading.Thread(target=self.readAngle_loop)
-    self.thread.start()
-
-    # self.offset = self.calibrate()self.mpu.readGyroscopeMaster()[2]
-
   def calibrate(self, samples=100):
     counter = 0
     sum_of_angles = 0
@@ -56,22 +48,9 @@ class angle:
   def resetTime(self):
     self.last_read = time.time()
 
-  def readAngle_stop(self):
-    self.stopflag = True
-
-  def readAngle_loop(self):
-    self.stopflag = False
-    while not self.stopflag:
-      self.readAngle()
-
-  def shutdown(self):
-    self.readAngle_stop()
-    self.thread.join()
-
 if __name__ == "__main__": 
   ang = angle()
   while True:
-    
     try:
       print(ang.readAngle())
     except KeyboardInterrupt:
