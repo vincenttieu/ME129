@@ -64,7 +64,6 @@ class GridFollow:
     global lon, lat, heading, lastintersecion
     # if the new intersection has been visited before 
     visited = True
-    pickupTime = None
     while True:
       linear, angular = self.line.steer()
       self.motor.setvel(linear, angular)
@@ -73,7 +72,7 @@ class GridFollow:
         result = "REACHED"
         break
 
-      if self.us.distance[1] < 15:
+      if self.us.distance[1] < 10:
         result = "BLOCKED"
         break
           
@@ -129,6 +128,7 @@ class GridFollow:
     time.sleep(self.time_after_int)
     # Stop the motors
     self.motor.stop()
+    print("current intersection: ", lon, lat)
     return visited
 
   def turnTo(self, direction):
@@ -172,6 +172,8 @@ class GridFollow:
     turned = (angle+45) // 90
     turned = int(max(min(turned, 4),1))
     heading = (heading + dir*turned)%4
+
+    print("Current Location", lon, lat)
     return turned
 
   def turnToValidLine(self, unwantedDir):
@@ -214,8 +216,6 @@ class GridFollow:
   def explore(self):
     # Drive straight until next intersection
     global lon, lat, heading, targetIntersection
-    if (lon, lat) == targetIntersection:
-      targetIntersection = None
     visited = self.driveStraight()
     # Fully stop
     self.wait()
@@ -225,7 +225,6 @@ class GridFollow:
 
     # Store current heading, since spinCheck() may change the heading
     current_heading = heading
-
     # If not, create a new intersection and check surrondings
     if not visited:
       # Check and update surrounding streets
@@ -297,7 +296,9 @@ class GridFollow:
       # Otherwise, the whole map is already explored
       else:
         print("Finished Exploring the Map!")
-        self.turnToNextLine()
+        if cur.streets[heading] == NOSTREET:
+          self.turnToNextLine()
+        lastintersecion = cur
         self.driving_pause = True
         return
       if direction == -1:
@@ -308,6 +309,11 @@ class GridFollow:
 
     # Update lastintersection
     lastintersecion = cur
+
+    if (lon, lat) == targetIntersection:
+      targetIntersection = None
+      self.driving_pause = True
+      print("Arrived at ", lon, lat)
   
   def dijkstra(self, target_lon, target_lat):
     """ Set headings of intersections according to desired target intersection """
@@ -527,6 +533,8 @@ def userInput(grid):
             i.streets[dir] = UNEXPLORED
         i.blocked = [False, False, False, False]
         i.blockedIntersection = False
+      print("FIRST: ", intersections)
+
         
       grid.driving_pause = False
       targetIntersection = (int(coord[1]), int(coord[2]))
